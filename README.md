@@ -1,25 +1,15 @@
-# Inventory_AI Management API
+# Inventory Chatbot API (Present Query) — FastAPI + SQL Server + Local LLM (Ollama)
 
-## Project Overview
-Inventory_AI Management API is a lightweight inventory management system designed with FastAPI and SQLAlchemy.  
-It allows management of **Sites** and **Assets**, providing CRUD operations and a mock AI chatbot endpoint for querying inventory data.  
+## Overview
+This project implements a minimal **Inventory AI Chat Service** in **Python + FastAPI** that answers inventory/business questions and returns, for each answer, the **exact SQL query** the system would run (**“present query”**).
 
-This project is prepared for integration with an AI-based query engine (OpenAI API or Azure) in the future once a paid API key is available.
-
----
-
-## Features
-
-- **CRUD Operations**
-  - Create, read Sites
-  - Create, read Assets
-  - Assets are linked to Sites via foreign key relationship
-
-- **Mock AI Chatbot**
-  - Provides answers to simple inventory questions
-  - Returns mock SQL queries for demonstration purposes
-  - Can be easily upgraded to a real AI-powered system when an API key is available
+ **No paid API key needed** — the solution uses a **Local LLM** via **Ollama (llama3)**.
 
 ---
 
-## Project Structure
+## Assignment Requirement (Summary)
+**Core Endpoint:** `POST /api/chat`
+
+**Request JSON**
+```json
+{ "session_id": "string", "message": "string", "context": {} }
