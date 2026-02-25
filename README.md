@@ -191,20 +191,3 @@ This implementation uses Local LLM (Ollama) instead of OpenAI/Azure.
 Architecture allows easy switch to OpenAI/Azure via environment variables.
 
 Demonstrates complete “Present Query” pattern with real SQL execution.
-
-👨‍💻 Author
-
-Inventory AI Management API – Academic Project
-DataHub Assignment
-
-
----
-
-## بعد ما تحطه:
-
-نفّذ:
-
-```powershell
-git add README.md
-git commit -m "Update README professionally"
-git push
