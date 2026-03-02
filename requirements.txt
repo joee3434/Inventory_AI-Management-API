@@ -1,0 +1,95 @@
+fastapi==0.111.0
+uvicorn==0.30.1
+sqlalchemy==2.0.30
+pyodbc==5.1.0
+pydantic==2.7.1
+requests==2.32.3
+python-dotenv==1.0.1
+Why Each Package Is Required
+
+fastapi
+Used to build the RESTful API endpoints and handle HTTP requests and responses.
+
+uvicorn
+ASGI server used to run the FastAPI application.
+
+sqlalchemy
+Object Relational Mapper (ORM) used to interact with SQL Server using Python models instead of raw SQL.
+
+pyodbc
+Database driver used to connect Python to Microsoft SQL Server through ODBC.
+
+pydantic
+Handles data validation and request body parsing inside FastAPI.
+
+requests
+Used in llm_client.py to communicate with the Ollama HTTP API for LLM-based query generation.
+
+python-dotenv
+Used to manage environment variables (for example, API keys in future AI integration).
+
+Required External Components
+
+The following must be installed on the system:
+
+ODBC Driver 18 for SQL Server
+This is required for pyodbc to connect to Microsoft SQL Server.
+
+Ollama
+Required for running the local Large Language Model.
+
+Verify installation:
+
+ollama --version
+
+Download the required model:
+
+ollama pull llama3
+How the System Works (Data Flow Overview)
+
+Standard CRUD Flow:
+
+Client Request
+→ FastAPI Router
+→ Pydantic Validation
+→ SQLAlchemy ORM
+→ SQL Server Database
+→ JSON Response
+
+AI Query Flow (/api/chat):
+
+Client Natural Language Question
+→ FastAPI Endpoint
+→ Prompt Sent to Ollama (llama3)
+→ LLM Generates SQL Query
+→ SQL Safety Validation (SELECT only, restricted tables)
+→ Query Executed via SQLAlchemy
+→ Results Returned
+→ LLM Generates Natural Language Summary
+→ Final JSON Response
+
+Running the Project from Scratch
+
+Create virtual environment:
+
+python -m venv venv
+
+Activate virtual environment (Windows):
+
+venv\Scripts\activate
+
+Install dependencies:
+
+pip install -r requirements.txt
+
+Run the server:
+
+uvicorn server:app --reload
+
+The API will be available at:
+
+http://127.0.0.1:8000
+
+Swagger UI documentation:
+
+http://127.0.0.1:8000/docs
