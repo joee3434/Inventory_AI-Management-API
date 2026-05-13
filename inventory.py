@@ -2,18 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import Column, Integer, String, ForeignKey, text
 from pydantic import BaseModel
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any
 import re
 import time
 
 from database import Base, get_db
-from llm_client import generate_sql, summarize_answer
+from llm_client import generate_sql
 
 router = APIRouter()
 
-# -------------------------
-# Database Models
-# -------------------------
 class Site(Base):
     __tablename__ = "Sites"
     id = Column(Integer, primary_key=True, index=True)
@@ -27,9 +24,6 @@ class Asset(Base):
     category = Column(String(100))
     site_id = Column(Integer, ForeignKey("Sites.id"), nullable=False)
 
-# -------------------------
-# Pydantic Models
-# -------------------------
 class ChatPayload(BaseModel):
     session_id: str
     message: str
@@ -45,78 +39,43 @@ class ChatResponse(BaseModel):
     status: str
     error: Optional[str] = None
 
-# -------------------------
-# SQL Safety Gate (SELECT-only)
-# -------------------------
 def _is_safe_select_sql(sql: str) -> bool:
-    if not sql:
-        return True
-
-    s = sql.strip()
-    if not s:
-        return True
-
-    low = s.lower()
-
-    # must start with select
+    low = sql.strip().lower()
     if not low.startswith("select"):
         return False
 
-    blocked = [
-        "insert", "update", "delete", "drop", "alter", "truncate",
-        "exec", "merge", "create", "grant", "revoke"
-    ]
+    blocked = ["insert", "update", "delete", "drop", "alter", "truncate", "exec", "merge", "create"]
     if any(b in low for b in blocked):
         return False
 
-    # allow only Sites/Assets after FROM/JOIN (simple but effective for your schema)
     allowed_tables = {"sites", "assets"}
     table_hits = re.findall(r"\b(from|join)\s+([a-zA-Z_][\w]*)", low)
-    for _, t in table_hits:
-        if t.lower() not in allowed_tables:
+
+    for _, table in table_hits:
+        if table.lower() not in allowed_tables:
             return False
 
     return True
 
 def _execute_select(db: Session, sql: str, max_rows: int = 50):
-    """
-    Executes SELECT query safely and returns:
-    - scalar for single value queries
-    - list[dict] for tabular results (up to max_rows)
-    """
     result = db.execute(text(sql))
+    rows = result.fetchmany(max_rows)
+    cols = list(result.keys())
 
-    # Try scalar (COUNT, etc.)
-    row = result.first()
-    if row is None:
+    if not rows:
         return []
 
-    # If single column and single row: return scalar
-    if len(row) == 1:
-        return row[0]
+    if len(rows) == 1 and len(cols) == 1:
+        return rows[0][0]
 
-    # Otherwise treat as table
-    cols = list(result.keys())
-    rows = [dict(zip(cols, row))]
+    return [dict(zip(cols, row)) for row in rows]
 
-    # Fetch more rows (we already took first row)
-    for _ in range(max_rows - 1):
-        nxt = result.fetchone()
-        if nxt is None:
-            break
-        rows.append(dict(zip(cols, nxt)))
-
-    return rows
-
-# -------------------------
-# Advanced Chat Endpoint (LLM -> SQL -> Execute -> Summarize)
-# -------------------------
 @router.post("/api/chat", response_model=ChatResponse)
 def chat_endpoint(payload: ChatPayload, db: Session = Depends(get_db)):
     start_time = time.time()
 
-    # 1) Generate SQL
     sql_res = generate_sql(payload.message)
+
     if sql_res["status"] == "error":
         return {
             "natural_language_answer": "LLM error occurred while generating SQL",
@@ -124,37 +83,37 @@ def chat_endpoint(payload: ChatPayload, db: Session = Depends(get_db)):
             "data": None,
             "latency_ms": int((time.time() - start_time) * 1000),
             "provider": sql_res.get("provider", "ollama"),
-            "model": sql_res.get("model", "llama3"),
+            "model": sql_res.get("model", "llama3.2:1b"),
             "status": "error",
             "error": sql_res.get("error")
         }
 
     sql = (sql_res.get("sql_query") or "").strip()
+
     if not sql:
         return {
-            "natural_language_answer": "I can't answer this with the current database schema (Sites, Assets).",
+            "natural_language_answer": "I cannot answer this question using the current database schema.",
             "sql_query": "",
             "data": None,
             "latency_ms": int((time.time() - start_time) * 1000),
             "provider": sql_res["provider"],
             "model": sql_res["model"],
-            "status": "ok"
+            "status": "ok",
+            "error": None
         }
 
-    # 2) Safety gate
     if not _is_safe_select_sql(sql):
         return {
-            "natural_language_answer": "Unsafe SQL was generated. Only SELECT queries are allowed.",
+            "natural_language_answer": "Unsafe SQL was blocked. Only SELECT queries are allowed.",
             "sql_query": "",
             "data": None,
             "latency_ms": int((time.time() - start_time) * 1000),
             "provider": sql_res["provider"],
             "model": sql_res["model"],
             "status": "error",
-            "error": "Unsafe SQL (blocked by safety gate)."
+            "error": "Unsafe SQL blocked."
         }
 
-    # 3) Execute SQL
     try:
         data = _execute_select(db, sql, max_rows=50)
     except Exception as e:
@@ -169,51 +128,36 @@ def chat_endpoint(payload: ChatPayload, db: Session = Depends(get_db)):
             "error": str(e)
         }
 
-    # 4) Summarize with LLM using real data
-    summ = summarize_answer(payload.message, sql, data)
-    if summ["status"] == "error":
-        # fallback: return raw data + generic answer
-        answer = "Query executed successfully. Please check returned data."
-        provider = summ.get("provider", sql_res["provider"])
-        model = summ.get("model", sql_res["model"])
-        status = "ok"
-        error = summ.get("error")
-    else:
-        answer = summ["natural_language_answer"]
-        provider = summ["provider"]
-        model = summ["model"]
-        status = "ok"
-        error = None
+    count = len(data) if isinstance(data, list) else 1
 
-    latency_ms = int((time.time() - start_time) * 1000)
     return {
-        "natural_language_answer": answer,
+        "natural_language_answer": f"Query executed successfully. Returned {count} result(s).",
         "sql_query": sql,
         "data": data,
-        "latency_ms": latency_ms,
-        "provider": provider,
-        "model": model,
-        "status": status,
-        "error": error
+        "latency_ms": int((time.time() - start_time) * 1000),
+        "provider": sql_res["provider"],
+        "model": sql_res["model"],
+        "status": "ok",
+        "error": None
     }
 
-# -------------------------
-# CRUD for Sites
-# -------------------------
 @router.post("/sites")
 def create_site(name: str, location: str, db: Session = Depends(get_db)):
     try:
         existing = db.query(Site).filter(Site.name == name).first()
         if existing:
             raise HTTPException(status_code=400, detail=f"Site '{name}' already exists")
+
         site = Site(name=name, location=location)
         db.add(site)
         db.commit()
         db.refresh(site)
         return site
+
     except HTTPException:
         db.rollback()
         raise
+
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
@@ -222,13 +166,11 @@ def create_site(name: str, location: str, db: Session = Depends(get_db)):
 def get_sites(db: Session = Depends(get_db)):
     return db.query(Site).all()
 
-# -------------------------
-# CRUD for Assets
-# -------------------------
 @router.post("/assets")
 def create_asset(name: str, category: str, site_id: int, db: Session = Depends(get_db)):
     try:
         site = db.query(Site).filter(Site.id == site_id).first()
+
         if not site:
             raise HTTPException(status_code=404, detail=f"Site with id {site_id} not found")
 
@@ -237,9 +179,11 @@ def create_asset(name: str, category: str, site_id: int, db: Session = Depends(g
         db.commit()
         db.refresh(asset)
         return asset
+
     except HTTPException:
         db.rollback()
         raise
+
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
